@@ -1,0 +1,5 @@
+{
+  "name": "Karma Kitchen Marrakech",
+  "description": "A daily blog post generator for the Karma Kitchen Marrakech project (launching 2026), using Gemini API.",
+  "requestFramePermissions": []
+}
