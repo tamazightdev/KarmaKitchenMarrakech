@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Chat } from '@google/genai';
-import { GeminiModel, BlogPost, SavedPost } from './types';
+import { GeminiModel, BlogPost, CalendarPost, SavedPost, GenerationMode } from './types';
 import { createBlogChat, sendChatMessage } from './services/geminiService';
 import { savePostLocally, getSavedPosts, deleteSavedPost } from './services/localDb';
 import { initGoogleDrive, saveToGoogleDrive } from './services/driveService';
+import { GODIN_STYLE_PROMPT, CALENDAR_PROMPT } from './constants';
 import SettingsModal from './components/SettingsModal';
 import SavedPostsModal from './components/SavedPostsModal';
 import BlogPostCard from './components/BlogPostCard';
-import { SettingsIcon, SparklesIcon, ListIcon, SendIcon } from './components/Icons';
+import CalendarView from './components/CalendarView';
+import { SettingsIcon, SparklesIcon, ListIcon, SendIcon, CalendarIcon } from './components/Icons';
 
 function App() {
   // Settings State
@@ -18,6 +20,8 @@ function App() {
   // UI State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSavedModalOpen, setIsSavedModalOpen] = useState(false);
+  const [mode, setMode] = useState<GenerationMode>('riff');
+  const [calendarDays, setCalendarDays] = useState<number>(7);
   
   // Generation State
   const [topic, setTopic] = useState('');
@@ -29,6 +33,7 @@ function App() {
   
   // Data State
   const [posts, setPosts] = useState<BlogPost[]>([]);
+  const [calendarPosts, setCalendarPosts] = useState<CalendarPost[]>([]);
   const [sources, setSources] = useState<string[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   
@@ -100,16 +105,27 @@ function App() {
     setError(null);
     setSuccessMsg(null);
     setPosts([]);
+    setCalendarPosts([]);
     setSources([]);
     setChatSession(null); // Reset chat on new topic
 
     try {
-      // Create new chat session
-      const chat = createBlogChat(apiKey, model);
-      const result = await sendChatMessage(chat, `TOPIC: ${topic}`);
+      // Create new chat session based on mode
+      const systemPrompt = mode === 'riff' ? GODIN_STYLE_PROMPT : CALENDAR_PROMPT;
+      const chat = createBlogChat(apiKey, model, systemPrompt);
+      
+      const userMessage = mode === 'riff' 
+        ? `TOPIC: ${topic}` 
+        : `TOPIC: ${topic}\nDURATION: ${calendarDays} Days.`;
+
+      const result = await sendChatMessage(chat, userMessage, mode === 'calendar');
       
       setChatSession(chat);
-      setPosts(result.posts);
+      if (mode === 'riff') {
+        setPosts(result.posts || []);
+      } else {
+        setCalendarPosts(result.calendar || []);
+      }
       setSources(result.sources);
     } catch (err: any) {
       setError(err.message || "Something went wrong");
@@ -127,11 +143,15 @@ function App() {
 
     try {
       // Send refinement instruction
-      // We append a format reminder to ensure the model stays in the JSON loop
-      const instruction = `${refineInput}\n\nIMPORTANT: Return the updated 3 blog posts as a valid JSON array, following the original format exactly.`;
-      const result = await sendChatMessage(chatSession, instruction);
+      const instruction = `${refineInput}\n\nIMPORTANT: Return the updated content strictly as a valid JSON array, following the original format exactly.`;
+      const result = await sendChatMessage(chatSession, instruction, mode === 'calendar');
       
-      setPosts(result.posts);
+      if (mode === 'riff') {
+        setPosts(result.posts || []);
+      } else {
+        setCalendarPosts(result.calendar || []);
+      }
+      
       setRefineInput(''); // Clear input on success
       if (result.sources.length > 0) {
         setSources(prev => Array.from(new Set([...prev, ...result.sources])));
@@ -228,38 +248,75 @@ function App() {
       <main className="w-full max-w-5xl relative z-10 flex flex-col gap-8 flex-grow pb-12">
         
         {/* Input Section */}
-        <section className="w-full max-w-2xl mx-auto">
-          <div className="glass-panel rounded-3xl p-2 shadow-xl">
-            <form onSubmit={handleGenerate} className="flex flex-col sm:flex-row gap-2">
+        <section className="w-full max-w-3xl mx-auto">
+          
+          {/* Mode Toggles */}
+          <div className="flex justify-center mb-4 gap-4">
+             <button 
+               onClick={() => setMode('riff')}
+               className={`flex items-center gap-2 px-6 py-2 rounded-full font-medium transition-all ${mode === 'riff' ? 'bg-black text-white shadow-lg scale-105' : 'bg-white/40 text-gray-600 hover:bg-white/60'}`}
+             >
+               <SparklesIcon className="w-5 h-5" />
+               Daily Riff
+             </button>
+             <button 
+               onClick={() => setMode('calendar')}
+               className={`flex items-center gap-2 px-6 py-2 rounded-full font-medium transition-all ${mode === 'calendar' ? 'bg-orange-700 text-white shadow-lg scale-105' : 'bg-white/40 text-gray-600 hover:bg-white/60'}`}
+             >
+               <CalendarIcon className="w-5 h-5" />
+               Content Calendar
+             </button>
+          </div>
+
+          <div className="glass-panel rounded-3xl p-3 shadow-xl flex flex-col gap-3">
+            <form onSubmit={handleGenerate} className="flex flex-col md:flex-row gap-3">
               <input
                 type="text"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                placeholder="Topic? (e.g., 'The Trust of the Empty Check')"
+                placeholder={mode === 'riff' ? "Topic? (e.g., 'The Trust of the Empty Check')" : "Theme for Calendar? (e.g., 'The 7 Principles of Giving')"}
                 className="flex-grow bg-transparent px-6 py-4 text-lg text-gray-800 placeholder-gray-500 focus:outline-none"
               />
+              
+              {mode === 'calendar' && (
+                <div className="flex items-center gap-2 px-2 md:border-l border-gray-300/50">
+                  <span className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap hidden md:inline">Duration</span>
+                  <select 
+                    value={calendarDays}
+                    onChange={(e) => setCalendarDays(Number(e.target.value))}
+                    className="bg-white/50 rounded-xl px-4 py-3 text-gray-800 font-bold focus:outline-none hover:bg-white/80 transition-colors cursor-pointer appearance-none text-center min-w-[100px]"
+                  >
+                    <option value={7}>7 Days</option>
+                    <option value={14}>14 Days</option>
+                    <option value={21}>21 Days</option>
+                    <option value={30}>30 Days</option>
+                  </select>
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={loading || !topic}
                 className={`
                   px-8 py-4 rounded-2xl font-semibold text-white shadow-lg flex items-center justify-center gap-2
-                  transition-all transform active:scale-95
-                  ${loading || !topic ? 'bg-gray-400 cursor-not-allowed' : 'bg-black hover:bg-gray-800'}
+                  transition-all transform active:scale-95 whitespace-nowrap
+                  ${loading || !topic ? 'bg-gray-400 cursor-not-allowed' : (mode === 'riff' ? 'bg-black hover:bg-gray-800' : 'bg-orange-700 hover:bg-orange-800')}
                 `}
               >
                 {loading ? (
                   <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                 ) : (
                   <>
-                    <SparklesIcon className="w-5 h-5" />
-                    <span>Riff</span>
+                    {mode === 'riff' ? <SparklesIcon className="w-5 h-5" /> : <CalendarIcon className="w-5 h-5" />}
+                    <span>{mode === 'riff' ? 'Riff' : 'Plan'}</span>
                   </>
                 )}
               </button>
             </form>
           </div>
           <p className="text-center mt-4 text-gray-500 text-sm">
-            Explaining the Gift Economy using <span className="font-semibold">{getModelDisplayName(model)}</span>
+            Using <span className="font-semibold">{getModelDisplayName(model)}</span>
+            {mode === 'calendar' && calendarDays > 14 && <span className="text-orange-600 block sm:inline sm:ml-2"> (Longer calendars may take 30s+ to generate)</span>}
           </p>
         </section>
 
@@ -276,7 +333,7 @@ function App() {
         )}
 
         {/* Results Section */}
-        {posts.length > 0 && (
+        {mode === 'riff' && posts.length > 0 && (
           <section className="animate-fade-in w-full space-y-12">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
               {posts.map((post, index) => (
@@ -289,58 +346,49 @@ function App() {
                 </div>
               ))}
             </div>
-
-            {/* Chat Refinement Input */}
-            <div className="max-w-3xl mx-auto animate-fade-in">
-              <div className="flex items-center justify-center mb-4">
-                 <div className="h-px bg-gray-300 w-16 mr-4"></div>
-                 <span className="text-gray-500 text-sm font-serif italic">Refine these riffs</span>
-                 <div className="h-px bg-gray-300 w-16 ml-4"></div>
-              </div>
-              <div className="glass-panel rounded-2xl p-2 shadow-lg flex items-center gap-2">
-                 <input 
-                   type="text" 
-                   value={refineInput}
-                   onChange={(e) => setRefineInput(e.target.value)}
-                   placeholder="E.g., 'Make it more playful' or 'Add a tea metaphor'..."
-                   className="flex-grow bg-transparent px-4 py-3 text-gray-800 placeholder-gray-500 focus:outline-none"
-                   disabled={refining}
-                 />
-                 <button 
-                   onClick={handleRefine}
-                   disabled={refining || !refineInput}
-                   className={`p-3 rounded-xl transition-all ${refining || !refineInput ? 'bg-gray-200 text-gray-400' : 'bg-black text-white hover:bg-gray-800'}`}
-                 >
-                   {refining ? (
-                     <div className="w-5 h-5 border-2 border-white/30 border-t-gray-500 rounded-full animate-spin"></div>
-                   ) : (
-                     <SendIcon className="w-5 h-5" />
-                   )}
-                 </button>
-              </div>
-            </div>
-
-            {/* Sources Attribution */}
-            {sources.length > 0 && (
-              <div className="glass-panel rounded-xl p-6 max-w-2xl mx-auto">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3">Grounding Sources</h4>
-                <div className="flex flex-wrap gap-2">
-                  {sources.map((src, i) => (
-                    <a
-                      key={i}
-                      href={src}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-blue-600 hover:underline truncate max-w-[200px] bg-white/50 px-2 py-1 rounded border border-blue-100"
-                    >
-                      {new URL(src).hostname}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Riff Refine Input */}
+            <RefineInput 
+               refineInput={refineInput} 
+               setRefineInput={setRefineInput} 
+               handleRefine={handleRefine} 
+               refining={refining} 
+            />
           </section>
         )}
+
+        {mode === 'calendar' && calendarPosts.length > 0 && (
+          <section className="animate-fade-in w-full space-y-12">
+            <CalendarView posts={calendarPosts} topic={topic} />
+            {/* Calendar Refine Input */}
+            <RefineInput 
+               refineInput={refineInput} 
+               setRefineInput={setRefineInput} 
+               handleRefine={handleRefine} 
+               refining={refining} 
+            />
+          </section>
+        )}
+        
+        {/* Sources Attribution */}
+        {sources.length > 0 && (
+          <div className="glass-panel rounded-xl p-6 max-w-2xl mx-auto">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3">Grounding Sources</h4>
+            <div className="flex flex-wrap gap-2">
+              {sources.map((src, i) => (
+                <a
+                  key={i}
+                  href={src}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:underline truncate max-w-[200px] bg-white/50 px-2 py-1 rounded border border-blue-100"
+                >
+                  {new URL(src).hostname}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
       </main>
       
       <footer className="mt-12 text-center text-gray-400 text-sm pb-6 relative z-10">
@@ -365,5 +413,37 @@ function App() {
     </div>
   );
 }
+
+// Extracted for re-use
+const RefineInput = ({ refineInput, setRefineInput, handleRefine, refining }: any) => (
+  <div className="max-w-3xl mx-auto animate-fade-in">
+    <div className="flex items-center justify-center mb-4">
+        <div className="h-px bg-gray-300 w-16 mr-4"></div>
+        <span className="text-gray-500 text-sm font-serif italic">Refine results</span>
+        <div className="h-px bg-gray-300 w-16 ml-4"></div>
+    </div>
+    <div className="glass-panel rounded-2xl p-2 shadow-lg flex items-center gap-2">
+        <input 
+          type="text" 
+          value={refineInput}
+          onChange={(e) => setRefineInput(e.target.value)}
+          placeholder="E.g., 'Make it more playful', 'Change day 3', or 'Add a tea metaphor'..."
+          className="flex-grow bg-transparent px-4 py-3 text-gray-800 placeholder-gray-500 focus:outline-none"
+          disabled={refining}
+        />
+        <button 
+          onClick={handleRefine}
+          disabled={refining || !refineInput}
+          className={`p-3 rounded-xl transition-all ${refining || !refineInput ? 'bg-gray-200 text-gray-400' : 'bg-black text-white hover:bg-gray-800'}`}
+        >
+          {refining ? (
+            <div className="w-5 h-5 border-2 border-white/30 border-t-gray-500 rounded-full animate-spin"></div>
+          ) : (
+            <SendIcon className="w-5 h-5" />
+          )}
+        </button>
+    </div>
+  </div>
+);
 
 export default App;

@@ -1,36 +1,35 @@
 import { GoogleGenAI, Tool, Chat } from "@google/genai";
-import { GeminiModel, BlogPost, GroundingChunk } from "../types";
+import { GeminiModel, BlogPost, CalendarPost, GroundingChunk } from "../types";
 import { GODIN_STYLE_PROMPT } from "../constants";
 
 interface GenerateResponse {
-  posts: BlogPost[];
+  posts?: BlogPost[];
+  calendar?: CalendarPost[];
   sources: string[];
 }
 
 // Shared parser to extract JSON from model response
-const parseBlogResponse = (textResponse: string): BlogPost[] => {
-  let parsedPosts: BlogPost[] = [];
+const parseJson = (textResponse: string): any => {
   try {
     // 1. Try to find the JSON array bracket pair first
     const jsonMatch = textResponse.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
-      parsedPosts = JSON.parse(jsonMatch[0]);
+      return JSON.parse(jsonMatch[0]);
     } else {
       // 2. Fallback: Try cleaning markdown code blocks
       let cleanJson = textResponse.trim();
       cleanJson = cleanJson.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
-      parsedPosts = JSON.parse(cleanJson);
+      return JSON.parse(cleanJson);
     }
   } catch (e) {
     console.error("JSON Parse Error", e);
     console.log("Raw Text:", textResponse);
     throw new Error("Failed to parse the generated content. Please try again.");
   }
-  return parsedPosts;
 };
 
 // Initialize a new Chat Session
-export const createBlogChat = (apiKey: string, model: GeminiModel): Chat => {
+export const createBlogChat = (apiKey: string, model: GeminiModel, systemPrompt: string = GODIN_STYLE_PROMPT): Chat => {
   if (!apiKey) throw new Error("API Key is missing");
 
   const ai = new GoogleGenAI({ apiKey });
@@ -40,7 +39,7 @@ export const createBlogChat = (apiKey: string, model: GeminiModel): Chat => {
   return ai.chats.create({
     model: model,
     config: {
-      systemInstruction: GODIN_STYLE_PROMPT,
+      systemInstruction: systemPrompt,
       tools: tools,
       temperature: 0.7,
     },
@@ -48,7 +47,7 @@ export const createBlogChat = (apiKey: string, model: GeminiModel): Chat => {
 };
 
 // Send a message to the chat (handles both initial topic and refinements)
-export const sendChatMessage = async (chat: Chat, message: string): Promise<GenerateResponse> => {
+export const sendChatMessage = async (chat: Chat, message: string, isCalendar: boolean = false): Promise<GenerateResponse> => {
   try {
     const response = await chat.sendMessage({
       message: message,
@@ -71,13 +70,20 @@ export const sendChatMessage = async (chat: Chat, message: string): Promise<Gene
       });
     }
 
-    const posts = parseBlogResponse(textResponse);
+    const parsedData = parseJson(textResponse);
     const uniqueSources = Array.from(new Set(sources));
 
-    return {
-      posts,
-      sources: uniqueSources
-    };
+    if (isCalendar) {
+      return {
+        calendar: parsedData as CalendarPost[],
+        sources: uniqueSources
+      };
+    } else {
+      return {
+        posts: parsedData as BlogPost[],
+        sources: uniqueSources
+      };
+    }
 
   } catch (error: any) {
     console.error("Gemini API Error:", error);
@@ -85,7 +91,7 @@ export const sendChatMessage = async (chat: Chat, message: string): Promise<Gene
     if (error.message && error.message.includes("API key")) {
       message = "Invalid API Key provided.";
     } else if (error.message && error.message.includes("Failed to parse")) {
-      message = "The model generated an invalid format. Please try again.";
+      message = "The model generated an invalid format. Please try again. If generating a long calendar, try a shorter duration.";
     }
     throw new Error(message);
   }

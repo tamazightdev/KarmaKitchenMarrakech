@@ -9,6 +9,12 @@ export interface BlogPost {
   searchAttribution?: string[];
 }
 
+export interface CalendarPost {
+  day: number;
+  title: string;
+  content: string;
+}
+
 export interface SavedPost extends BlogPost {
   id: string;
   createdAt: number;
@@ -27,3 +33,5 @@ export interface GroundingChunk {
     title: string;
   };
 }
+
+export type GenerationMode = 'riff' | 'calendar';
